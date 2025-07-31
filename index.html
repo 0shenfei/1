@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的日历 - 图片视频分享</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>社交媒体发布日历</h1>
+            <p>上传图片和视频，与所有设备同步</p>
+        </header>
+
+
+
+        <div class="calendar-container">
+            <div class="calendar-header">
+                <button id="prevMonth">‹</button>
+                <h2 id="currentMonth"></h2>
+                <button id="nextMonth">›</button>
+            </div>
+            <div class="calendar-grid" id="calendarGrid">
+                <div class="day-header">S</div>
+                <div class="day-header">M</div>
+                <div class="day-header">T</div>
+                <div class="day-header">W</div>
+                <div class="day-header">T</div>
+                <div class="day-header">F</div>
+                <div class="day-header">S</div>
+            </div>
+        </div>
+
+        <div class="media-gallery" id="mediaGallery">
+            <h3>📸 我的回忆</h3>
+            <div class="gallery-grid" id="galleryGrid">
+                <!-- 动态加载的媒体内容 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 模态框 -->
+    <div class="modal" id="mediaModal">
+        <div class="modal-content">
+            <span class="close" id="closeModal">&times;</span>
+            <div class="modal-body" id="modalBody">
+                <!-- 媒体内容将在这里显示 -->
+            </div>
+        </div>
+    </div>
+
+    <div class="loading" id="loading" style="display: none;">
+        <div class="spinner"></div>
+        <p>上传中...</p>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
