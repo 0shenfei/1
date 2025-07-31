@@ -415,7 +415,7 @@ async function uploadFileForDate(file, targetDate) {
             name: file.name,
             type: file.type,
             size: file.size,
-            uploadDate: targetDate.toISOString(),
+            upload_date: targetDate.toISOString(),
             url: null
         };
         
@@ -547,7 +547,7 @@ async function loadMediaFromSupabase() {
         const { data, error } = await supabase
             .from('media_items')
             .select('*')
-            .order('uploadDate', { ascending: false });
+            .order('upload_date', { ascending: false });
         
         if (error) {
             throw error;
@@ -628,7 +628,7 @@ function renderCalendar() {
         
         // 检查是否有媒体文件
         const dayMediaItems = mediaData.filter(item => {
-            const itemDate = new Date(item.uploadDate);
+            const itemDate = new Date(item.upload_date);
             return itemDate.toDateString() === dayDate.toDateString();
         });
         
@@ -857,7 +857,7 @@ function renderGallery() {
     
     // 按日期排序（最新的在前）
     const sortedMedia = [...mediaData].sort((a, b) => 
-        new Date(b.uploadDate) - new Date(a.uploadDate)
+        new Date(b.upload_date) - new Date(a.upload_date)
     );
     
     sortedMedia.forEach(item => {
@@ -873,7 +873,7 @@ function createMediaElement(item) {
     const isVideo = item.type.startsWith('video/');
     const mediaTag = isVideo ? 'video' : 'img';
     
-    const uploadDate = new Date(item.uploadDate);
+    const uploadDate = new Date(item.upload_date);
     const dateStr = uploadDate.toLocaleDateString('zh-CN', {
         year: 'numeric',
         month: 'short',
