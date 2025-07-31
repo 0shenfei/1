@@ -60,8 +60,8 @@ const prevMonthBtn = document.getElementById('prevMonth');
 const nextMonthBtn = document.getElementById('nextMonth');
 const galleryGrid = document.getElementById('galleryGrid');
 const mediaModal = document.getElementById('mediaModal');
-const modalBody = document.getElementById('modalBody');
 const closeModal = document.getElementById('closeModal');
+const modalBody = document.getElementById('modalBody');
 const loading = document.getElementById('loading');
 
 // 初始化应用
@@ -744,23 +744,100 @@ function addMediaThumbnail(dayElement, mediaItems) {
     // 创建当前显示的媒体元素
     function createMediaElement(item) {
         const isVideo = item.type.startsWith('video/');
-        const element = document.createElement(isVideo ? 'video' : 'img');
-        element.className = 'media-thumbnail';
-        element.src = item.url;
-        element.style.opacity = '1';
-        element.style.transition = 'opacity 0.5s ease-in-out';
         
         if (isVideo) {
-            element.muted = true;
-            element.preload = 'metadata';
+            // 对于视频，创建一个容器来显示缩略图
+            const container = document.createElement('div');
+            container.className = 'media-thumbnail video-thumbnail';
+            container.style.cssText = `
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: #000;
+                border-radius: 8px;
+                overflow: hidden;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+            `;
+            
+            // 创建视频元素用于生成缩略图
+            const video = document.createElement('video');
+            video.src = item.url;
+            video.muted = true;
+            video.preload = 'metadata';
+            video.playsInline = true;
+            video.setAttribute('webkit-playsinline', 'true');
+            video.style.cssText = `
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                opacity: 0;
+                transition: opacity 0.3s ease;
+            `;
+            
+            // 创建播放图标
+            const playIcon = document.createElement('div');
+            playIcon.innerHTML = `
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="white" style="opacity: 0.8;">
+                    <path d="M8 5v14l11-7z"/>
+                </svg>
+            `;
+            playIcon.style.cssText = `
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                z-index: 2;
+                pointer-events: none;
+            `;
+            
+            // 视频加载完成后显示第一帧
+            video.addEventListener('loadedmetadata', () => {
+                video.currentTime = 0.5;
+            });
+            
+            video.addEventListener('seeked', () => {
+                video.style.opacity = '1';
+            });
+            
+            video.addEventListener('error', () => {
+                console.error('视频加载失败:', item.url);
+                container.innerHTML = `
+                    <div style="color: white; text-align: center; font-size: 12px;">
+                        <div style="margin-bottom: 8px;">📹</div>
+                        <div>视频</div>
+                    </div>
+                `;
+            });
+            
+            container.appendChild(video);
+            container.appendChild(playIcon);
+            
+            container.addEventListener('click', (e) => {
+                e.stopPropagation();
+                showMediaModal(item);
+            });
+            
+            return container;
+        } else {
+            // 对于图片，使用原来的方式
+            const element = document.createElement('img');
+            element.className = 'media-thumbnail';
+            element.src = item.url;
+            element.style.opacity = '1';
+            element.style.transition = 'opacity 0.5s ease-in-out';
+            
+            element.addEventListener('click', (e) => {
+                e.stopPropagation();
+                showMediaModal(item);
+            });
+            
+            return element;
         }
-        
-        element.addEventListener('click', (e) => {
-            e.stopPropagation();
-            showMediaModal(item);
-        });
-        
-        return element;
     }
     
     // 初始化第一个媒体元素
@@ -880,8 +957,10 @@ function createMediaElement(item) {
         day: 'numeric'
     });
     
+    const videoAttributes = isVideo ? 'muted playsinline preload="metadata"' : '';
+    
     mediaDiv.innerHTML = `
-        <${mediaTag} src="${item.url}" alt="${item.name}" ${isVideo ? 'muted' : ''}>
+        <${mediaTag} src="${item.url}" alt="${item.name}" ${videoAttributes}>
         <div class="media-info">
             <div class="media-date">${dateStr}</div>
             <div class="media-name">${item.name}</div>
@@ -902,10 +981,10 @@ function createMediaElement(item) {
 function showMediaModal(item) {
     const isVideo = item.type.startsWith('video/');
     const mediaTag = isVideo ? 'video' : 'img';
-    const controls = isVideo ? 'controls' : '';
+    const videoAttributes = isVideo ? 'controls playsinline muted' : '';
     
     modalBody.innerHTML = `
-        <${mediaTag} src="${item.url}" alt="${item.name}" ${controls}>
+        <${mediaTag} src="${item.url}" alt="${item.name}" ${videoAttributes}>
         <div class="modal-actions">
             <button class="delete-btn" onclick="deleteMedia('${item.id}')">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">

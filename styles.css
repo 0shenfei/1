@@ -561,6 +561,45 @@ header p {
     box-shadow: 0 2px 4px rgba(0,0,0,0.15);
     transition: transform 0.2s ease;
     z-index: 2;
+    display: block;
+    visibility: visible;
+}
+
+/* 移动端视频缩略图优化 */
+.calendar-day .media-thumbnail[src*=".mp4"],
+.calendar-day .media-thumbnail[src*=".mov"],
+.calendar-day .media-thumbnail[src*=".webm"],
+.calendar-day video.media-thumbnail {
+    -webkit-playsinline: true !important;
+    playsinline: true !important;
+    object-fit: cover !important;
+    background: #000 !important;
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    width: 100% !important;
+    height: 100% !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    z-index: 1 !important;
+}
+
+/* 强制移动端视频显示 */
+.media-container video {
+    -webkit-playsinline: true !important;
+    playsinline: true !important;
+    object-fit: cover !important;
+    background-color: #000 !important;
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    width: 100% !important;
+    height: 100% !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    border-radius: 8px !important;
 }
 
 .calendar-day .media-thumbnail:hover {
@@ -848,8 +887,6 @@ header p {
         padding: 10px;
     }
     
-
-    
     .calendar-container,
     .media-gallery {
         padding: 15px;
@@ -866,5 +903,104 @@ header p {
     
     header h1 {
         font-size: 2rem;
+    }
+    
+    /* 移动端日历视频缩略图优化 */
+    .calendar-day {
+        min-height: 80px;
+    }
+    
+    .calendar-day .media-thumbnail {
+        border-radius: 6px;
+    }
+    
+    .calendar-day video.media-thumbnail {
+        -webkit-playsinline: true;
+        playsinline: true;
+        object-fit: cover;
+        background-color: #000;
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+    
+    /* 确保媒体容器在移动端正确显示 */
+    .media-container {
+        border-radius: 6px;
+        overflow: hidden;
+    }
+}
+
+@media (max-width: 439px) {
+    .container {
+        padding: 5px;
+    }
+    
+    .calendar-container {
+        padding: 10px;
+        margin: 0;
+    }
+    
+    .calendar-grid {
+        gap: 1px;
+        border-radius: 6px;
+    }
+    
+    .calendar-day {
+        padding: 4px;
+        font-size: 0.9rem;
+        min-height: 60px;
+        aspect-ratio: 1;
+    }
+    
+    .day-header {
+        padding: 8px 2px;
+        font-size: 0.75rem;
+    }
+    
+    .day-number {
+        font-size: 0.85rem;
+    }
+    
+    .calendar-upload-btn,
+    .calendar-text-btn,
+    .calendar-delete-btn {
+        width: 20px;
+        height: 20px;
+    }
+    
+    .calendar-upload-btn svg,
+    .calendar-text-btn svg,
+    .calendar-delete-btn svg {
+        width: 12px;
+        height: 12px;
+    }
+    
+    .media-count {
+        font-size: 0.6rem;
+        padding: 1px 4px;
+        top: 2px;
+        right: 2px;
+    }
+    
+    .text-indicator {
+        width: 4px;
+        height: 4px;
+        bottom: 2px;
+        right: 2px;
+    }
+    
+    header h1 {
+        font-size: 1.5rem;
+    }
+    
+    .calendar-header {
+        margin-bottom: 15px;
+    }
+    
+    .calendar-header button {
+        width: 30px;
+        height: 30px;
+        font-size: 1rem;
     }
 }
