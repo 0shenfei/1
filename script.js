@@ -411,7 +411,7 @@ async function uploadFileForDate(file, targetDate) {
         }
         
         const mediaItem = {
-            id: Date.now() + Math.random(),
+            id: Date.now() + Math.floor(Math.random() * 1000),
             name: file.name,
             type: file.type,
             size: file.size,
