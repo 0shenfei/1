@@ -1,13 +1,52 @@
 // Supabase配置 - 请替换为您的实际配置
-const SUPABASE_URL = 'YOUR_SUPABASE_URL';
-const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';
+const SUPABASE_URL = 'https://afbdzfnmomhfnoivqedx.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFmYmR6Zm5tb21oZm5vaXZxZWR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5ODMxNDUsImV4cCI6MjA2OTU1OTE0NX0.dwRHSAKUqQTCWCpgchi28vbB5v8uqpWlx43Q1YbXwI0';
 
 // 初始化Supabase客户端
 let supabase;
 try {
     supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    console.log('✅ Supabase客户端初始化成功');
+    console.log('📍 Supabase URL:', SUPABASE_URL);
+    console.log('🔑 API Key前缀:', SUPABASE_ANON_KEY.substring(0, 20) + '...');
+    
+    // 测试连接
+    testSupabaseConnection();
 } catch (error) {
-    console.log('Supabase未配置，使用本地存储模式');
+    console.log('❌ Supabase未配置，使用本地存储模式');
+    console.error('错误详情:', error);
+}
+
+// 测试Supabase连接
+async function testSupabaseConnection() {
+    try {
+        console.log('🔍 正在测试Supabase连接...');
+        
+        // 测试数据库连接
+        const { data, error } = await supabase
+            .from('media_items')
+            .select('count')
+            .limit(1);
+            
+        if (error) {
+            console.log('⚠️ 数据库连接测试失败:', error.message);
+            console.log('💡 可能的原因: 表不存在或RLS策略未正确配置');
+        } else {
+            console.log('✅ 数据库连接测试成功');
+        }
+        
+        // 测试存储连接
+        const { data: buckets, error: storageError } = await supabase.storage.listBuckets();
+        if (storageError) {
+            console.log('⚠️ 存储连接测试失败:', storageError.message);
+        } else {
+            console.log('✅ 存储连接测试成功');
+            console.log('📦 可用存储桶:', buckets.map(b => b.name));
+        }
+        
+    } catch (error) {
+        console.log('❌ Supabase连接测试失败:', error.message);
+    }
 }
 
 // 全局变量
