@@ -1,17 +1,21 @@
 {
-  "name": "calendar-app",
+  "name": "background-batch-remover",
   "version": "1.0.0",
-  "description": "A calendar app with image and video upload functionality using Supabase",
+  "description": "Local batch image background removal tool with multiple AI providers",
   "main": "index.html",
   "scripts": {
     "dev": "python3 -m http.server 8000",
     "build": "echo 'Build complete'"
   },
-  "dependencies": {
-    "@supabase/supabase-js": "^2.38.0"
-  },
+  "dependencies": {},
   "devDependencies": {},
-  "keywords": ["calendar", "supabase", "upload"],
+  "keywords": [
+    "background",
+    "removebg",
+    "batch",
+    "image-processing",
+    "ai"
+  ],
   "author": "",
   "license": "MIT"
 }
