@@ -3,59 +3,160 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>我的日历 - 图片视频分享</title>
+    <title>批量图片背景去除工具</title>
     <link rel="stylesheet" href="styles.css">
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>社交媒体发布日历</h1>
-            <p>上传图片和视频，与所有设备同步</p>
-        </header>
-
-
-
-        <div class="calendar-container">
-            <div class="calendar-header">
-                <button id="prevMonth">‹</button>
-                <h2 id="currentMonth"></h2>
-                <button id="nextMonth">›</button>
-            </div>
-            <div class="calendar-grid" id="calendarGrid">
-                <div class="day-header">S</div>
-                <div class="day-header">M</div>
-                <div class="day-header">T</div>
-                <div class="day-header">W</div>
-                <div class="day-header">T</div>
-                <div class="day-header">F</div>
-                <div class="day-header">S</div>
-            </div>
+    <header class="app-header">
+        <div>
+            <h1>批量图片背景去除工具</h1>
+            <p class="subtitle">选择本地文件夹，批量调用 Remove.bg、通义千问 Image-Edit、PhotoRoom、OpenAI、Google Gemini 等服务将背景转换为纯白。</p>
         </div>
-
-        <div class="media-gallery" id="mediaGallery">
-            <h3>📸 我的回忆</h3>
-            <div class="gallery-grid" id="galleryGrid">
-                <!-- 动态加载的媒体内容 -->
-            </div>
+        <div class="header-actions">
+            <button id="saveConfigBtn" class="secondary">💾 保存 API 配置</button>
+            <button id="resetConfigBtn" class="ghost">♻️ 重置配置</button>
         </div>
-    </div>
+    </header>
 
-    <!-- 模态框 -->
-    <div class="modal" id="mediaModal">
-        <div class="modal-content">
-            <span class="close" id="closeModal">&times;</span>
-            <div class="modal-body" id="modalBody">
-                <!-- 媒体内容将在这里显示 -->
+    <main class="layout">
+        <section class="card" id="supportWarning">
+            <h2>浏览器兼容性检查</h2>
+            <p>正在检查文件系统访问权限……</p>
+        </section>
+
+        <section class="card" id="apiConfig">
+            <div class="section-header">
+                <h2>API 服务配置</h2>
+                <span id="selectedProvidersSummary">未启用任何服务</span>
             </div>
-        </div>
-    </div>
+            <p class="section-tip">填写各服务的 API Key，并开启需要使用的服务。配置会自动保存在本地，不会上传到网络。</p>
+            <div id="providerList" class="provider-grid"></div>
+        </section>
 
-    <div class="loading" id="loading" style="display: none;">
-        <div class="spinner"></div>
-        <p>上传中...</p>
-    </div>
+        <section class="card" id="folderSection">
+            <div class="section-header">
+                <h2>文件夹选择</h2>
+                <span id="fileCountLabel">未加载图片</span>
+            </div>
+            <div class="folder-actions">
+                <button id="pickSourceBtn" class="primary">📂 选择图片文件夹</button>
+                <button id="pickOutputBtn" class="secondary">💾 选择输出文件夹</button>
+                <label class="checkbox">
+                    <input type="checkbox" id="includeSubfolders">
+                    <span>包含子文件夹</span>
+                </label>
+            </div>
+            <p class="section-tip">源文件仅用于读取，处理后的白底 PNG 将保存到输出文件夹。请确保浏览器允许“读写”权限。</p>
+            <div class="path-info" id="pathInfo"></div>
+        </section>
 
-    <script src="script.js"></script>
+        <section class="card" id="controlPanel">
+            <div class="section-header">
+                <h2>批量处理</h2>
+                <span id="progressLabel">等待开始</span>
+            </div>
+            <div class="control-grid">
+                <div>
+                    <label for="concurrencyInput">并发数量</label>
+                    <input type="number" id="concurrencyInput" min="1" max="5" value="1">
+                </div>
+                <div>
+                    <label for="outputFormat">输出格式</label>
+                    <select id="outputFormat">
+                        <option value="png">PNG（透明通道）</option>
+                        <option value="jpg">JPG（纯白背景）</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="fileNameStrategy">文件命名</label>
+                    <select id="fileNameStrategy">
+                        <option value="suffix">原名 + 提供商后缀</option>
+                        <option value="folder">按提供商创建子文件夹</option>
+                    </select>
+                </div>
+                <div class="switch-row">
+                    <label for="autoStartToggle">选择后自动开始</label>
+                    <label class="switch">
+                        <input type="checkbox" id="autoStartToggle">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+            <div class="control-actions">
+                <button id="startBtn" class="primary">🚀 开始处理</button>
+                <button id="stopBtn" class="ghost" disabled>⏹️ 停止</button>
+                <button id="clearResultsBtn" class="ghost">🧹 清空结果记录</button>
+            </div>
+            <p class="warning" id="processingWarning" hidden>当前已有任务在进行，请先停止或等待完成。</p>
+        </section>
+
+        <section class="card" id="fileListSection">
+            <div class="section-header">
+                <h2>待处理图片</h2>
+                <button id="refreshBtn" class="ghost">🔄 重新扫描</button>
+            </div>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>文件名</th>
+                            <th>大小</th>
+                            <th>提供商状态</th>
+                            <th>输出文件</th>
+                        </tr>
+                    </thead>
+                    <tbody id="fileTableBody">
+                        <tr class="empty-row">
+                            <td colspan="4">尚未选择文件夹或没有符合要求的图片文件。</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="card" id="resultSection">
+            <div class="section-header">
+                <h2>处理结果预览</h2>
+                <span id="resultSummary">暂无结果</span>
+            </div>
+            <div id="resultGrid" class="result-grid empty">
+                <div class="empty-placeholder">处理完成后将在此展示缩略图。</div>
+            </div>
+        </section>
+
+        <section class="card" id="logSection">
+            <div class="section-header">
+                <h2>任务日志</h2>
+                <button id="copyLogBtn" class="ghost">📋 复制日志</button>
+            </div>
+            <div id="logOutput" class="log-output"></div>
+        </section>
+    </main>
+
+    <template id="providerTemplate">
+        <article class="provider-card" data-provider="">
+            <div class="provider-header">
+                <div class="provider-title">
+                    <h3></h3>
+                    <p class="provider-desc"></p>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" class="provider-toggle">
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <ul class="provider-meta"></ul>
+            <div class="provider-fields"></div>
+            <div class="provider-footer">
+                <a class="provider-doc" href="#" target="_blank" rel="noopener">查看文档</a>
+            </div>
+        </article>
+    </template>
+
+    <noscript>
+        <div class="noscript">此应用需要启用 JavaScript 才能运行。</div>
+    </noscript>
+
+    <script src="script.js" type="module"></script>
 </body>
 </html>

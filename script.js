@@ -1,1207 +1,1113 @@
-// Supabase配置 - 请替换为您的实际配置
-const SUPABASE_URL = 'https://afbdzfnmomhfnoivqedx.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFmYmR6Zm5tb21oZm5vaXZxZWR4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM5ODMxNDUsImV4cCI6MjA2OTU1OTE0NX0.dwRHSAKUqQTCWCpgchi28vbB5v8uqpWlx43Q1YbXwI0';
+const STORAGE_KEY = 'backgroundRemoverConfig';
+const HISTORY_KEY = 'backgroundRemoverHistory';
 
-// 初始化Supabase客户端
-let supabase;
-try {
-    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    console.log('✅ Supabase客户端初始化成功');
-    console.log('📍 Supabase URL:', SUPABASE_URL);
-    console.log('🔑 API Key前缀:', SUPABASE_ANON_KEY.substring(0, 20) + '...');
-    
-    // 测试连接
-    testSupabaseConnection();
-} catch (error) {
-    console.log('❌ Supabase未配置，使用本地存储模式');
-    console.error('错误详情:', error);
-}
-
-// 测试Supabase连接
-async function testSupabaseConnection() {
-    try {
-        console.log('🔍 正在测试Supabase连接...');
-        
-        // 测试数据库连接
-        const { data, error } = await supabase
-            .from('media_items')
-            .select('count')
-            .limit(1);
-            
-        if (error) {
-            console.log('⚠️ 数据库连接测试失败:', error.message);
-            console.log('💡 可能的原因: 表不存在或RLS策略未正确配置');
-        } else {
-            console.log('✅ 数据库连接测试成功');
-        }
-        
-        // 测试存储连接
-        const { data: buckets, error: storageError } = await supabase.storage.listBuckets();
-        if (storageError) {
-            console.log('⚠️ 存储连接测试失败:', storageError.message);
-        } else {
-            console.log('✅ 存储连接测试成功');
-            console.log('📦 可用存储桶:', buckets.map(b => b.name));
-        }
-        
-    } catch (error) {
-        console.log('❌ Supabase连接测试失败:', error.message);
+const DEFAULT_CONFIG = {
+    general: {
+        includeSubfolders: false,
+        concurrency: 1,
+        outputFormat: 'png',
+        fileNameStrategy: 'suffix',
+        autoStart: false
+    },
+    providers: {
+        removeBg: { enabled: false, apiKey: '', size: 'auto', channel: 'foreground' },
+        tongyi: { enabled: false, apiKey: '', model: 'wanx-image-editing-v1' },
+        photoroom: { enabled: false, apiKey: '', background: 'ffffff' },
+        openai: { enabled: false, apiKey: '', model: 'gpt-image-1' },
+        gemini: { enabled: false, apiKey: '', model: 'imageinpainting-001' }
     }
-}
+};
 
-// 全局变量
-let currentDate = new Date();
-let mediaData = JSON.parse(localStorage.getItem('calendarMedia')) || [];
+const PROVIDERS = {
+    removeBg: {
+        id: 'removeBg',
+        name: 'Remove.bg',
+        description: '经典的背景去除服务，支持 PNG/JPG 输入，输出透明背景，可设置背景颜色。',
+        docs: 'https://www.remove.bg/api',
+        meta: ['原生白底参数', '支持 25MB 以下图片'],
+        fields: [
+            { key: 'apiKey', label: 'API Key', type: 'password', placeholder: '输入 remove.bg API Key' },
+            { key: 'size', label: '输出尺寸', type: 'select', options: [
+                { label: '自动 (auto)', value: 'auto' },
+                { label: '4K (4k)', value: '4k' },
+                { label: '普通 (regular)', value: 'regular' }
+            ] },
+            { key: 'channel', label: '保留通道', type: 'select', options: [
+                { label: '仅前景 (foreground)', value: 'foreground' },
+                { label: '抠出主体 (alpha)', value: 'alpha' }
+            ] }
+        ],
+        async process(file, config, context) {
+            if (!config.apiKey) {
+                throw new Error('未配置 Remove.bg API Key');
+            }
+            const formData = new FormData();
+            formData.append('image_file', file, file.name);
+            formData.append('size', config.size || 'auto');
+            formData.append('type', 'auto');
+            formData.append('bg_color', context.outputFormat === 'jpg' ? 'ffffff' : 'ffffff00');
+            formData.append('channels', config.channel || 'foreground');
 
-// DOM元素
-const calendarGrid = document.getElementById('calendarGrid');
-const currentMonthElement = document.getElementById('currentMonth');
-const prevMonthBtn = document.getElementById('prevMonth');
-const nextMonthBtn = document.getElementById('nextMonth');
-const galleryGrid = document.getElementById('galleryGrid');
-const mediaModal = document.getElementById('mediaModal');
-const closeModal = document.getElementById('closeModal');
-const modalBody = document.getElementById('modalBody');
-const loading = document.getElementById('loading');
+            const response = await fetch('https://api.remove.bg/v1.0/removebg', {
+                method: 'POST',
+                headers: {
+                    'X-Api-Key': config.apiKey
+                },
+                body: formData
+            });
 
-// 初始化应用
-document.addEventListener('DOMContentLoaded', function() {
-    initializeApp();
-});
+            if (!response.ok) {
+                const errorText = await safeReadText(response);
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
 
-function initializeApp() {
-    setupEventListeners();
-    renderCalendar();
-    loadMediaFromStorage();
-    
-    // 如果配置了Supabase，从云端加载数据
-    if (supabase && SUPABASE_URL !== 'YOUR_SUPABASE_URL') {
-        loadMediaFromSupabase();
+            const blob = await response.blob();
+            return ensureOutputFormat(blob, context.outputFormat);
+        }
+    },
+    tongyi: {
+        id: 'tongyi',
+        name: '通义千问 Image-Edit',
+        description: '阿里通义千问图像编辑接口，可对图片进行抠图、换底等操作。',
+        docs: 'https://help.aliyun.com/zh/dashscope/developer-reference/api-details-for-image-editing',
+        meta: ['需开通 DashScope', '建议 10MB 以下'],
+        fields: [
+            { key: 'apiKey', label: 'API Key', type: 'password', placeholder: '输入 DashScope API Key' },
+            { key: 'model', label: '模型', type: 'text', placeholder: '默认 wanx-image-editing-v1' }
+        ],
+        async process(file, config, context) {
+            if (!config.apiKey) {
+                throw new Error('未配置通义千问 API Key');
+            }
+            const formData = new FormData();
+            formData.append('model', config.model || 'wanx-image-editing-v1');
+            formData.append('image', file, file.name);
+            formData.append('prompt', 'Remove the background and replace it with a solid pure white background.');
+
+            const response = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/images/edits', {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${config.apiKey}`
+                },
+                body: formData
+            });
+
+            if (!response.ok) {
+                const errorText = await safeReadText(response);
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+
+            const data = await response.json();
+            const base64 = data?.data?.[0]?.b64_json;
+            if (!base64) {
+                throw new Error('通义接口未返回图像数据');
+            }
+            const blob = base64ToBlob(base64, 'image/png');
+            return ensureOutputFormat(blob, context.outputFormat);
+        }
+    },
+    photoroom: {
+        id: 'photoroom',
+        name: 'PhotoRoom API',
+        description: 'PhotoRoom 背景分割接口，可直接返回纯色背景图。',
+        docs: 'https://docs.photoroom.com/reference/remove-background',
+        meta: ['支持 URL 与文件', '最高 10MB'],
+        fields: [
+            { key: 'apiKey', label: 'API Key', type: 'password', placeholder: '输入 PhotoRoom API Key' },
+            { key: 'background', label: '背景颜色', type: 'text', placeholder: '默认 ffffff' }
+        ],
+        async process(file, config, context) {
+            if (!config.apiKey) {
+                throw new Error('未配置 PhotoRoom API Key');
+            }
+            const formData = new FormData();
+            formData.append('image_file', file, file.name);
+            formData.append('background', context.outputFormat === 'png' ? 'ffffff' : (config.background || 'ffffff'));
+            formData.append('format', context.outputFormat === 'png' ? 'png' : 'jpeg');
+
+            const response = await fetch('https://sdk.photoroom.com/v1/segment', {
+                method: 'POST',
+                headers: {
+                    'X-Api-Key': config.apiKey
+                },
+                body: formData
+            });
+
+            if (!response.ok) {
+                const errorText = await safeReadText(response);
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+
+            const blob = await response.blob();
+            return ensureOutputFormat(blob, context.outputFormat);
+        }
+    },
+    openai: {
+        id: 'openai',
+        name: 'OpenAI 图像编辑 (GPT)',
+        description: '调用 OpenAI 图像生成/编辑接口，根据提示生成白色背景版本。',
+        docs: 'https://platform.openai.com/docs/guides/images',
+        meta: ['需 GPT-Image 权限', '自动生成 PNG'],
+        fields: [
+            { key: 'apiKey', label: 'API Key', type: 'password', placeholder: '输入 OpenAI API Key' },
+            { key: 'model', label: '模型', type: 'text', placeholder: '默认 gpt-image-1' }
+        ],
+        async process(file, config, context) {
+            if (!config.apiKey) {
+                throw new Error('未配置 OpenAI API Key');
+            }
+            const base64Image = await blobToBase64(file);
+            const payload = {
+                model: config.model || 'gpt-image-1',
+                input: [
+                    {
+                        role: 'user',
+                        content: [
+                            { type: 'input_text', text: 'Remove the background of this product photo and replace it with a pure white studio background.' },
+                            { type: 'input_image', image_base64: base64Image }
+                        ]
+                    }
+                ],
+                response_format: { type: 'base64_image', detail: 'high' }
+            };
+
+            const response = await fetch('https://api.openai.com/v1/responses', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${config.apiKey}`
+                },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const errorText = await safeReadText(response);
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+
+            const data = await response.json();
+            const base64 = data?.output?.[0]?.content?.find?.(item => item.type === 'output_image')?.image_base64
+                || data?.output?.[0]?.content?.[0]?.image_base64;
+            if (!base64) {
+                throw new Error('OpenAI 未返回图像数据');
+            }
+            const blob = base64ToBlob(base64, 'image/png');
+            return ensureOutputFormat(blob, context.outputFormat);
+        }
+    },
+    gemini: {
+        id: 'gemini',
+        name: 'Google Gemini Image Edit',
+        description: '使用 Google Gemini 图像修复/抠图接口，为商品图生成白底版本。',
+        docs: 'https://ai.google.dev/api/rest/v1beta/models',
+        meta: ['需启用生成式 AI', '支持 4K 以内'],
+        fields: [
+            { key: 'apiKey', label: 'API Key', type: 'password', placeholder: '输入 Google API Key' },
+            { key: 'model', label: '模型', type: 'text', placeholder: '默认 imageinpainting-001' }
+        ],
+        async process(file, config, context) {
+            if (!config.apiKey) {
+                throw new Error('未配置 Google API Key');
+            }
+            const base64Image = await blobToBase64(file, 'data_url');
+            const payload = {
+                prompt: {
+                    text: 'Remove the background of this image and ensure the subject is on a pure white background.'
+                },
+                image: base64Image
+            };
+            const model = config.model || 'imageinpainting-001';
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateImage?key=${config.apiKey}`;
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const errorText = await safeReadText(response);
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+
+            const data = await response.json();
+            const base64 = data?.images?.[0]?.base64 || data?.candidates?.[0]?.content?.parts?.find?.(p => p.inline_data)?.inline_data?.data;
+            if (!base64) {
+                throw new Error('Gemini 接口未返回图像数据');
+            }
+            const blob = base64ToBlob(base64, 'image/png');
+            return ensureOutputFormat(blob, context.outputFormat);
+        }
     }
+};
+
+const state = {
+    config: loadConfig(),
+    files: [],
+    sourceDirHandle: null,
+    outputDirHandle: null,
+    isProcessing: false,
+    stopRequested: false,
+    completed: 0,
+    totalTasks: 0,
+    resultPreviews: [],
+    history: loadHistory()
+};
+
+const elements = {};
+
+document.addEventListener('DOMContentLoaded', init);
+
+function init() {
+    cacheElements();
+    updateSupportWarning();
+    renderProviders();
+    renderHistorySummary();
+    bindEvents();
+    applyGeneralConfig();
+    updateSelectedProvidersSummary();
 }
 
-function setupEventListeners() {
-    
-    // 日历导航
-    prevMonthBtn.addEventListener('click', () => {
-        currentDate.setMonth(currentDate.getMonth() - 1);
-        renderCalendar();
-    });
-    
-    nextMonthBtn.addEventListener('click', () => {
-        currentDate.setMonth(currentDate.getMonth() + 1);
-        renderCalendar();
-    });
-    
-    // 模态框
-    closeModal.addEventListener('click', () => {
-        mediaModal.style.display = 'none';
-    });
-    
-    mediaModal.addEventListener('click', (e) => {
-        if (e.target === mediaModal) {
-            mediaModal.style.display = 'none';
-        }
-    });
+function cacheElements() {
+    elements.supportWarning = document.getElementById('supportWarning');
+    elements.providerList = document.getElementById('providerList');
+    elements.selectedProvidersSummary = document.getElementById('selectedProvidersSummary');
+    elements.pickSourceBtn = document.getElementById('pickSourceBtn');
+    elements.pickOutputBtn = document.getElementById('pickOutputBtn');
+    elements.includeSubfolders = document.getElementById('includeSubfolders');
+    elements.fileCountLabel = document.getElementById('fileCountLabel');
+    elements.pathInfo = document.getElementById('pathInfo');
+    elements.startBtn = document.getElementById('startBtn');
+    elements.stopBtn = document.getElementById('stopBtn');
+    elements.refreshBtn = document.getElementById('refreshBtn');
+    elements.progressLabel = document.getElementById('progressLabel');
+    elements.processingWarning = document.getElementById('processingWarning');
+    elements.fileTableBody = document.getElementById('fileTableBody');
+    elements.resultGrid = document.getElementById('resultGrid');
+    elements.resultSummary = document.getElementById('resultSummary');
+    elements.clearResultsBtn = document.getElementById('clearResultsBtn');
+    elements.logOutput = document.getElementById('logOutput');
+    elements.copyLogBtn = document.getElementById('copyLogBtn');
+    elements.saveConfigBtn = document.getElementById('saveConfigBtn');
+    elements.resetConfigBtn = document.getElementById('resetConfigBtn');
+    elements.concurrencyInput = document.getElementById('concurrencyInput');
+    elements.outputFormat = document.getElementById('outputFormat');
+    elements.fileNameStrategy = document.getElementById('fileNameStrategy');
+    elements.autoStartToggle = document.getElementById('autoStartToggle');
+    elements.progressLabel = document.getElementById('progressLabel');
 }
 
-
-
-// 文件处理
-function handleFiles(files) {
-    const validFiles = files.filter(file => {
-        const isImage = file.type.startsWith('image/');
-        const isVideo = file.type.startsWith('video/');
-        return isImage || isVideo;
+function bindEvents() {
+    elements.pickSourceBtn.addEventListener('click', selectSourceDirectory);
+    elements.pickOutputBtn.addEventListener('click', selectOutputDirectory);
+    elements.includeSubfolders.addEventListener('change', () => {
+        state.config.general.includeSubfolders = elements.includeSubfolders.checked;
+        saveConfig();
     });
-    
-    if (validFiles.length === 0) {
-        alert('请选择有效的图片或视频文件！');
-        return;
-    }
-    
-    // 检查文件大小限制
-    const maxSize = supabase && SUPABASE_URL !== 'YOUR_SUPABASE_URL' ? 50 * 1024 * 1024 : 5 * 1024 * 1024; // 云端50MB，本地5MB
-    const oversizedFiles = validFiles.filter(file => file.size > maxSize);
-    
-    if (oversizedFiles.length > 0) {
-        const sizeLimit = maxSize / (1024 * 1024);
-        const fileNames = oversizedFiles.map(f => f.name).join(', ');
-        alert(`以下文件超过${sizeLimit}MB限制，无法上传：\n${fileNames}\n\n建议：\n1. 压缩图片后重试\n2. 配置Supabase云存储以支持更大文件`);
-        return;
-    }
-    
-    validFiles.forEach(file => uploadFile(file));
+    elements.concurrencyInput.addEventListener('change', () => {
+        const value = clamp(parseInt(elements.concurrencyInput.value, 10) || 1, 1, 5);
+        elements.concurrencyInput.value = value;
+        state.config.general.concurrency = value;
+        saveConfig();
+    });
+    elements.outputFormat.addEventListener('change', () => {
+        state.config.general.outputFormat = elements.outputFormat.value;
+        saveConfig();
+    });
+    elements.fileNameStrategy.addEventListener('change', () => {
+        state.config.general.fileNameStrategy = elements.fileNameStrategy.value;
+        saveConfig();
+    });
+    elements.autoStartToggle.addEventListener('change', () => {
+        state.config.general.autoStart = elements.autoStartToggle.checked;
+        saveConfig();
+    });
+    elements.refreshBtn.addEventListener('click', rescanFiles);
+    elements.startBtn.addEventListener('click', startProcessing);
+    elements.stopBtn.addEventListener('click', stopProcessing);
+    elements.clearResultsBtn.addEventListener('click', clearResults);
+    elements.copyLogBtn.addEventListener('click', copyLogToClipboard);
+    elements.saveConfigBtn.addEventListener('click', () => {
+        saveConfig(true);
+        appendLog('配置已保存。', 'success');
+    });
+    elements.resetConfigBtn.addEventListener('click', resetConfig);
 }
 
-// 处理日历格子的文件上传
-function handleCalendarUpload(targetDate) {
-    // 创建隐藏的文件输入框
-    const fileInput = document.createElement('input');
-    fileInput.type = 'file';
-    fileInput.accept = 'image/*,video/*';
-    fileInput.multiple = true;
-    fileInput.style.display = 'none';
-    
-    // 添加文件选择事件监听
-    fileInput.addEventListener('change', async (e) => {
-        const files = e.target.files;
-        if (files.length === 0) return;
-        
-        showLoading(true);
-        
-        // 处理每个选中的文件
-        for (const file of files) {
-            try {
-                await uploadFileForDate(file, targetDate);
-            } catch (error) {
-                console.error('上传失败:', error);
-                showNotification('上传失败: ' + error.message, 'error');
-            }
-        }
-        
-        // 清理临时文件输入框
-        document.body.removeChild(fileInput);
-    });
-    
-    // 将文件输入框添加到页面并触发点击
-    document.body.appendChild(fileInput);
-    fileInput.click();
+function applyGeneralConfig() {
+    elements.includeSubfolders.checked = !!state.config.general.includeSubfolders;
+    elements.concurrencyInput.value = state.config.general.concurrency;
+    elements.outputFormat.value = state.config.general.outputFormat;
+    elements.fileNameStrategy.value = state.config.general.fileNameStrategy;
+    elements.autoStartToggle.checked = !!state.config.general.autoStart;
 }
 
-// 显示文字输入对话框
-function showTextDialog(targetDate) {
-    // 创建对话框背景
-    const dialogOverlay = document.createElement('div');
-    dialogOverlay.className = 'text-dialog-overlay';
-    
-    // 创建对话框
-    const dialog = document.createElement('div');
-    dialog.className = 'text-dialog';
-    
-    // 获取已有的文字记录和平台选择
-    const existingText = getTextForDate(targetDate);
-    const existingPlatforms = getPlatformsForDate(targetDate);
-    
-    dialog.innerHTML = `
-        <div class="text-dialog-header">
-            <h3>添加文字记录</h3>
-            <button class="text-dialog-close">&times;</button>
-        </div>
-        <div class="text-dialog-body">
-            <textarea class="text-input" placeholder="在这里输入您的文字记录..." rows="6">${existingText}</textarea>
-        </div>
-        <div class="social-platforms">
-            <h4>选择发布平台</h4>
-            <div class="platform-buttons">
-                <button class="platform-btn" data-platform="tiktok" title="TikTok">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-.88-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43V7.83a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1.04-.26z"/>
-                    </svg>
-                </button>
-                <button class="platform-btn" data-platform="instagram" title="Instagram">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/>
-                    </svg>
-                </button>
-                <button class="platform-btn" data-platform="facebook" title="Facebook">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-                    </svg>
-                </button>
-                <button class="platform-btn" data-platform="xiaohongshu" title="小红书">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                        <circle cx="12" cy="12" r="12" fill="#FF2442"/>
-                        <path d="M8.5 6.5h2.5c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H8.5c-1.1 0-2-.9-2-2v-7c0-1.1.9-2 2-2zm.5 2v7h1.5V8.5H9zm4.5 0v7H15V8.5h-1.5z" fill="white"/>
-                    </svg>
-                </button>
-                <button class="platform-btn" data-platform="wechat" title="微信">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18 0 .659-.52 1.188-1.162 1.188-.642 0-1.162-.529-1.162-1.188 0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18 0 .659-.52 1.188-1.162 1.188-.642 0-1.162-.529-1.162-1.188 0-.651.52-1.18 1.162-1.18zm4.721 2.471c-1.793-.213-3.637.229-4.979 1.322-1.341 1.094-2.009 2.625-1.69 4.237.319 1.612 1.394 3.035 2.932 3.892a.424.424 0 0 1 .161.508l-.295 1.126a.718.718 0 0 0-.037.161.223.223 0 0 0 .218.218.25.25 0 0 0 .125-.041l1.445-.849a.659.659 0 0 1 .544-.074c.543.161 1.126.242 1.723.242 2.948 0 5.336-2.278 5.336-5.092 0-2.815-2.388-5.093-5.336-5.093-.185 0-.364.016-.543.043z"/>
-                    </svg>
-                </button>
-            </div>
-        </div>
-        <div class="text-dialog-footer">
-            <button class="text-dialog-copy" title="复制文字内容">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                </svg>
-                复制
-            </button>
-            <div class="text-dialog-actions">
-                <button class="text-dialog-cancel">取消</button>
-                <button class="text-dialog-save">保存</button>
-            </div>
-        </div>
-    `;
-    
-    dialogOverlay.appendChild(dialog);
-    document.body.appendChild(dialogOverlay);
-    
-    // 聚焦到文本框
-    const textarea = dialog.querySelector('.text-input');
-    textarea.focus();
-    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-    
-    // 绑定事件
-    const closeBtn = dialog.querySelector('.text-dialog-close');
-    const cancelBtn = dialog.querySelector('.text-dialog-cancel');
-    const saveBtn = dialog.querySelector('.text-dialog-save');
-    const copyBtn = dialog.querySelector('.text-dialog-copy');
-    
-    const closeDialog = () => {
-        document.body.removeChild(dialogOverlay);
-    };
-    
-    closeBtn.addEventListener('click', closeDialog);
-    cancelBtn.addEventListener('click', closeDialog);
-    
-    // 复制文字内容
-    copyBtn.addEventListener('click', async () => {
-        const text = textarea.value.trim();
-        if (text) {
-            try {
-                await navigator.clipboard.writeText(text);
-                showNotification('文字内容已复制到剪贴板', 'success');
-            } catch (err) {
-                // 降级方案：使用传统的复制方法
-                textarea.select();
-                document.execCommand('copy');
-                showNotification('文字内容已复制到剪贴板', 'success');
-            }
-        } else {
-            showNotification('没有可复制的内容', 'info');
-        }
-    });
-    
-    // 平台按钮选择功能
-    const platformBtns = dialog.querySelectorAll('.platform-btn');
-    let selectedPlatforms = new Set(existingPlatforms);
-    
-    // 初始化按钮状态
-    platformBtns.forEach(btn => {
-        const platform = btn.dataset.platform;
-        if (selectedPlatforms.has(platform)) {
-            btn.classList.add('selected');
-        }
-        
-        btn.addEventListener('click', () => {
-            if (selectedPlatforms.has(platform)) {
-                selectedPlatforms.delete(platform);
-                btn.classList.remove('selected');
-            } else {
-                selectedPlatforms.add(platform);
-                btn.classList.add('selected');
-            }
-            
-            // 显示选择的平台
-            if (selectedPlatforms.size > 0) {
-                const platformNames = {
-                    'tiktok': 'TikTok',
-                    'instagram': 'Instagram', 
-                    'facebook': 'Facebook',
-                    'xiaohongshu': '小红书',
-                    'wechat': '微信'
-                };
-                const selectedNames = Array.from(selectedPlatforms).map(p => platformNames[p]).join('、');
-                console.log(`已选择平台: ${selectedNames}`);
-            }
+function renderProviders() {
+    const template = document.getElementById('providerTemplate');
+    elements.providerList.innerHTML = '';
+
+    Object.values(PROVIDERS).forEach(provider => {
+        const config = state.config.providers[provider.id] || {};
+        const node = template.content.cloneNode(true);
+        const card = node.querySelector('.provider-card');
+        card.dataset.provider = provider.id;
+        card.querySelector('h3').textContent = provider.name;
+        card.querySelector('.provider-desc').textContent = provider.description;
+        card.querySelector('.provider-doc').href = provider.docs;
+
+        const metaList = card.querySelector('.provider-meta');
+        metaList.innerHTML = '';
+        provider.meta.forEach(item => {
+            const li = document.createElement('li');
+            li.textContent = item;
+            metaList.appendChild(li);
         });
-    });
-    
-    // 点击背景关闭
-    dialogOverlay.addEventListener('click', (e) => {
-        if (e.target === dialogOverlay) {
-            closeDialog();
-        }
-    });
-    
-    // 保存文字
-    saveBtn.addEventListener('click', () => {
-        const text = textarea.value.trim();
-        const platforms = Array.from(selectedPlatforms);
-        saveTextForDate(targetDate, text, platforms);
-        closeDialog();
-        renderCalendar(); // 重新渲染日历以显示文字指示器
-    });
-    
-    // ESC键关闭
-    const handleEsc = (e) => {
-        if (e.key === 'Escape') {
-            closeDialog();
-            document.removeEventListener('keydown', handleEsc);
-        }
-    };
-    document.addEventListener('keydown', handleEsc);
-}
 
-// 获取指定日期的文字记录
-function getTextForDate(date) {
-    const textData = JSON.parse(localStorage.getItem('calendarTexts')) || {};
-    const dateKey = date.toISOString().split('T')[0];
-    const record = textData[dateKey];
-    return record ? (typeof record === 'string' ? record : record.text || '') : '';
-}
+        const toggle = card.querySelector('.provider-toggle');
+        toggle.checked = !!config.enabled;
+        toggle.addEventListener('change', () => {
+            state.config.providers[provider.id] = {
+                ...DEFAULT_CONFIG.providers[provider.id],
+                ...state.config.providers[provider.id],
+                enabled: toggle.checked
+            };
+            updateProviderStatusForFiles(provider.id, toggle.checked);
+            updateSelectedProvidersSummary();
+            saveConfig();
+            renderFileTable();
+        });
 
-// 获取指定日期的平台选择
-function getPlatformsForDate(date) {
-    const textData = JSON.parse(localStorage.getItem('calendarTexts')) || {};
-    const dateKey = date.toISOString().split('T')[0];
-    const record = textData[dateKey];
-    return record && typeof record === 'object' ? (record.platforms || []) : [];
-}
+        const fieldsContainer = card.querySelector('.provider-fields');
+        fieldsContainer.innerHTML = '';
+        provider.fields.forEach(field => {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'field-group';
+            const label = document.createElement('label');
+            label.textContent = field.label;
+            wrapper.appendChild(label);
 
-// 保存指定日期的文字记录和平台选择
-function saveTextForDate(date, text, platforms = []) {
-    const textData = JSON.parse(localStorage.getItem('calendarTexts')) || {};
-    const dateKey = date.toISOString().split('T')[0];
-    
-    if (text || platforms.length > 0) {
-        textData[dateKey] = {
-            text: text,
-            platforms: platforms,
-            updatedAt: new Date().toISOString()
-        };
-    } else {
-        delete textData[dateKey];
-    }
-    
-    localStorage.setItem('calendarTexts', JSON.stringify(textData));
-    showNotification(text ? '文字记录保存成功' : '文字记录已删除', 'success');
-}
-
-// 显示通知消息
-function showNotification(message, type = 'info') {
-    const notification = document.createElement('div');
-    notification.className = `notification notification-${type}`;
-    notification.textContent = message;
-    
-    document.body.appendChild(notification);
-    
-    // 触发动画
-    setTimeout(() => {
-        notification.classList.add('show');
-    }, 10);
-    
-    // 3秒后自动消失
-    setTimeout(() => {
-        notification.classList.remove('show');
-        setTimeout(() => {
-            if (document.body.contains(notification)) {
-                document.body.removeChild(notification);
-            }
-        }, 300);
-    }, 3000);
-}
-
-async function uploadFile(file) {
-    return await uploadFileForDate(file, new Date());
-}
-
-// 为指定日期上传文件
-async function uploadFileForDate(file, targetDate) {
-    showLoading(true);
-    
-    try {
-        // 显示处理进度
-        if (file.type.startsWith('image/') && file.size > 1024 * 1024) {
-            showNotification('正在压缩大图片，请稍候...', 'info');
-        }
-        
-        const mediaItem = {
-            id: Date.now() + Math.floor(Math.random() * 1000),
-            name: file.name,
-            type: file.type,
-            size: file.size,
-            upload_date: targetDate.toISOString(),
-            url: null
-        };
-        
-        // 如果配置了Supabase，上传到云端
-        if (supabase && SUPABASE_URL !== 'YOUR_SUPABASE_URL') {
-            const fileExt = file.name.split('.').pop();
-            const fileName = `${mediaItem.id}.${fileExt}`;
-            
-            // 上传文件到Supabase Storage
-            const { data, error } = await supabase.storage
-                .from('calendar-media')
-                .upload(fileName, file);
-            
-            if (error) {
-                throw error;
-            }
-            
-            // 获取公共URL
-            const { data: urlData } = supabase.storage
-                .from('calendar-media')
-                .getPublicUrl(fileName);
-            
-            mediaItem.url = urlData.publicUrl;
-            
-            // 保存到数据库
-            const { error: dbError } = await supabase
-                .from('media_items')
-                .insert([mediaItem]);
-            
-            if (dbError) {
-                throw dbError;
-            }
-        } else {
-            // 本地存储模式 - 检查并压缩大图片
-            let processedFile = file;
-            if (file.type.startsWith('image/') && file.size > 1024 * 1024) { // 大于1MB的图片进行压缩
-                processedFile = await compressImage(file);
-                const compressionRatio = ((file.size - processedFile.size) / file.size * 100).toFixed(1);
-                showNotification(`图片压缩完成，大小减少了${compressionRatio}%`, 'success');
-                // 更新媒体项的大小信息
-                mediaItem.size = processedFile.size;
-            }
-            mediaItem.url = await fileToBase64(processedFile);
-            
-            // 检查localStorage空间
-            try {
-                const testData = JSON.stringify([...mediaData, mediaItem]);
-                localStorage.setItem('calendarMediaTest', testData);
-                localStorage.removeItem('calendarMediaTest');
-            } catch (e) {
-                if (e.name === 'QuotaExceededError') {
-                    throw new Error('本地存储空间不足，请删除一些旧文件或配置云存储');
-                }
-                throw e;
-            }
-        }
-        
-        // 添加到本地数组并保存
-        mediaData.push(mediaItem);
-        saveMediaToStorage();
-        
-        // 更新界面
-        renderCalendar();
-        renderGallery();
-        
-        showNotification('文件上传成功！', 'success');
-        
-    } catch (error) {
-        console.error('上传失败:', error);
-        showNotification('上传失败: ' + error.message, 'error');
-    } finally {
-        showLoading(false);
-    }
-}
-
-// 文件转base64
-function fileToBase64(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-    });
-}
-
-// 压缩图片
-function compressImage(file, maxWidth = 1920, maxHeight = 1080, quality = 0.8) {
-    return new Promise((resolve) => {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        const img = new Image();
-        
-        img.onload = () => {
-            // 计算压缩后的尺寸
-            let { width, height } = img;
-            
-            if (width > maxWidth || height > maxHeight) {
-                const ratio = Math.min(maxWidth / width, maxHeight / height);
-                width *= ratio;
-                height *= ratio;
-            }
-            
-            canvas.width = width;
-            canvas.height = height;
-            
-            // 绘制压缩后的图片
-            ctx.drawImage(img, 0, 0, width, height);
-            
-            // 转换为blob
-            canvas.toBlob((blob) => {
-                // 创建新的File对象
-                const compressedFile = new File([blob], file.name, {
-                    type: file.type,
-                    lastModified: Date.now()
+            let input;
+            if (field.type === 'select') {
+                input = document.createElement('select');
+                field.options.forEach(opt => {
+                    const option = document.createElement('option');
+                    option.value = opt.value;
+                    option.textContent = opt.label;
+                    input.appendChild(option);
                 });
-                resolve(compressedFile);
-            }, file.type, quality);
-        };
-        
-        img.src = URL.createObjectURL(file);
-    });
-}
-
-// 从Supabase加载媒体数据
-async function loadMediaFromSupabase() {
-    if (!supabase || SUPABASE_URL === 'YOUR_SUPABASE_URL') return;
-    
-    try {
-        const { data, error } = await supabase
-            .from('media_items')
-            .select('*')
-            .order('upload_date', { ascending: false });
-        
-        if (error) {
-            throw error;
-        }
-        
-        mediaData = data || [];
-        saveMediaToStorage();
-        renderCalendar();
-        renderGallery();
-        
-    } catch (error) {
-        console.error('从云端加载数据失败:', error);
-    }
-}
-
-// 本地存储操作
-function saveMediaToStorage() {
-    localStorage.setItem('calendarMedia', JSON.stringify(mediaData));
-}
-
-function loadMediaFromStorage() {
-    const stored = localStorage.getItem('calendarMedia');
-    if (stored) {
-        mediaData = JSON.parse(stored);
-        renderGallery();
-    }
-}
-
-// 渲染日历
-function renderCalendar() {
-    const year = currentDate.getFullYear();
-    const month = currentDate.getMonth();
-    
-    // 更新月份标题
-    const monthNames = [
-        'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
-        'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'
-    ];
-    currentMonthElement.textContent = `${monthNames[month]} ${year}`;
-    
-    // 清除现有日期和定时器
-    const existingDays = calendarGrid.querySelectorAll('.calendar-day');
-    existingDays.forEach(day => {
-        // 清除可能存在的轮播定时器
-        const mediaContainer = day.querySelector('.media-container');
-        if (mediaContainer && mediaContainer._carouselInterval) {
-            clearInterval(mediaContainer._carouselInterval);
-        }
-        day.remove();
-    });
-    
-    // 获取月份信息
-    const firstDay = new Date(year, month, 1);
-    const lastDay = new Date(year, month + 1, 0);
-    const daysInMonth = lastDay.getDate();
-    const startingDayOfWeek = firstDay.getDay();
-    
-    // 添加上个月的日期
-    const prevMonth = new Date(year, month - 1, 0);
-    for (let i = startingDayOfWeek - 1; i >= 0; i--) {
-        const day = prevMonth.getDate() - i;
-        const dayElement = createDayElement(day, true);
-        calendarGrid.appendChild(dayElement);
-    }
-    
-    // 添加当前月份的日期
-    const today = new Date();
-    for (let day = 1; day <= daysInMonth; day++) {
-        const dayDate = new Date(year, month, day);
-        const dayElement = createDayElement(day, false, dayDate);
-        
-        // 检查是否是今天
-        if (year === today.getFullYear() && 
-            month === today.getMonth() && 
-            day === today.getDate()) {
-            dayElement.classList.add('today');
-        }
-        
-        // 检查是否有媒体文件
-        const dayMediaItems = mediaData.filter(item => {
-            const itemDate = new Date(item.upload_date);
-            return itemDate.toDateString() === dayDate.toDateString();
+                input.value = config[field.key] || field.options?.[0]?.value || '';
+            } else {
+                input = document.createElement(field.type === 'textarea' ? 'textarea' : 'input');
+                input.type = field.type === 'password' ? 'password' : (field.type || 'text');
+                input.placeholder = field.placeholder || '';
+                input.value = config[field.key] || '';
+                if (field.type === 'password') {
+                    input.autocomplete = 'off';
+                }
+            }
+            input.dataset.provider = provider.id;
+            input.dataset.field = field.key;
+            input.addEventListener('change', handleProviderFieldChange);
+            wrapper.appendChild(input);
+            fieldsContainer.appendChild(wrapper);
         });
-        
-        if (dayMediaItems.length > 0) {
-            dayElement.classList.add('has-media');
-            addMediaThumbnail(dayElement, dayMediaItems);
-        }
-        
-        calendarGrid.appendChild(dayElement);
-    }
-    
-    // 添加下个月的日期
-    const totalCells = calendarGrid.children.length - 7; // 减去表头
-    const remainingCells = 42 - totalCells; // 6行 x 7列 = 42
-    for (let day = 1; day <= remainingCells; day++) {
-        const dayElement = createDayElement(day, true);
-        calendarGrid.appendChild(dayElement);
-    }
-}
 
-function createDayElement(day, isOtherMonth, fullDate) {
-    const dayElement = document.createElement('div');
-    dayElement.className = 'calendar-day';
-    if (isOtherMonth) {
-        dayElement.classList.add('other-month');
-    }
-    
-    // 存储完整日期信息
-    if (fullDate) {
-        dayElement.dataset.date = fullDate.toISOString().split('T')[0];
-    }
-    
-    const dayNumber = document.createElement('div');
-    dayNumber.className = 'day-number';
-    dayNumber.textContent = day;
-    dayElement.appendChild(dayNumber);
-    
-    // 检查是否有文字记录并添加指示器
-    if (fullDate && getTextForDate(fullDate)) {
-        const textIndicator = document.createElement('div');
-        textIndicator.className = 'text-indicator';
-        textIndicator.title = '有文字记录';
-        dayElement.appendChild(textIndicator);
-    }
-    
-    // 添加上传按钮（仅对当前月份的日期）
-    if (!isOtherMonth && fullDate) {
-        const uploadBtn = document.createElement('button');
-        uploadBtn.className = 'calendar-upload-btn';
-        uploadBtn.innerHTML = `
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="7,10 12,5 17,10"></polyline>
-                <line x1="12" y1="5" x2="12" y2="15"></line>
-            </svg>
-        `;
-        uploadBtn.title = '上传图片或视频';
-        
-        // 添加点击事件
-        uploadBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            handleCalendarUpload(fullDate);
-        });
-        
-        dayElement.appendChild(uploadBtn);
-        
-        // 添加文案按钮
-        const textBtn = document.createElement('button');
-        textBtn.className = 'calendar-text-btn';
-        textBtn.innerHTML = `
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14,2 14,8 20,8"></polyline>
-                <line x1="16" y1="13" x2="8" y2="13"></line>
-                <line x1="16" y1="17" x2="8" y2="17"></line>
-                <polyline points="10,9 9,9 8,9"></polyline>
-            </svg>
-        `;
-        textBtn.title = '添加文字记录';
-        
-        // 添加点击事件
-        textBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            showTextDialog(fullDate);
-        });
-        
-        dayElement.appendChild(textBtn);
-    }
-    
-    return dayElement;
-}
-
-// 添加媒体缩略图到日历日期
-function addMediaThumbnail(dayElement, mediaItems) {
-    if (mediaItems.length === 0) return;
-    
-    let currentIndex = 0;
-    let carouselInterval = null;
-    
-    // 创建媒体容器
-    const mediaContainer = document.createElement('div');
-    mediaContainer.className = 'media-container';
-    mediaContainer.style.cssText = `
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        overflow: hidden;
-        border-radius: 8px;
-    `;
-    
-    // 创建当前显示的媒体元素
-    function createMediaElement(item) {
-        const isVideo = item.type.startsWith('video/');
-        
-        if (isVideo) {
-            // 对于视频，创建一个容器来显示缩略图
-            const container = document.createElement('div');
-            container.className = 'media-thumbnail video-thumbnail';
-            container.style.cssText = `
-                position: absolute;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background: #000;
-                border-radius: 8px;
-                overflow: hidden;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                cursor: pointer;
-            `;
-            
-            // 创建视频元素用于生成缩略图
-            const video = document.createElement('video');
-            video.src = item.url;
-            video.muted = true;
-            video.preload = 'metadata';
-            video.playsInline = true;
-            video.setAttribute('webkit-playsinline', 'true');
-            video.style.cssText = `
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-                opacity: 0;
-                transition: opacity 0.3s ease;
-            `;
-            
-            // 创建播放图标
-            const playIcon = document.createElement('div');
-            playIcon.innerHTML = `
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="white" style="opacity: 0.8;">
-                    <path d="M8 5v14l11-7z"/>
-                </svg>
-            `;
-            playIcon.style.cssText = `
-                position: absolute;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-                z-index: 2;
-                pointer-events: none;
-            `;
-            
-            // 视频加载完成后显示第一帧
-            video.addEventListener('loadedmetadata', () => {
-                video.currentTime = 0.5;
-            });
-            
-            video.addEventListener('seeked', () => {
-                video.style.opacity = '1';
-            });
-            
-            video.addEventListener('error', () => {
-                console.error('视频加载失败:', item.url);
-                container.innerHTML = `
-                    <div style="color: white; text-align: center; font-size: 12px;">
-                        <div style="margin-bottom: 8px;">📹</div>
-                        <div>视频</div>
-                    </div>
-                `;
-            });
-            
-            container.appendChild(video);
-            container.appendChild(playIcon);
-            
-            container.addEventListener('click', (e) => {
-                e.stopPropagation();
-                showMediaModal(item);
-            });
-            
-            return container;
-        } else {
-            // 对于图片，使用原来的方式
-            const element = document.createElement('img');
-            element.className = 'media-thumbnail';
-            element.src = item.url;
-            element.style.opacity = '1';
-            element.style.transition = 'opacity 0.5s ease-in-out';
-            
-            element.addEventListener('click', (e) => {
-                e.stopPropagation();
-                showMediaModal(item);
-            });
-            
-            return element;
-        }
-    }
-    
-    // 初始化第一个媒体元素
-    let currentElement = createMediaElement(mediaItems[currentIndex]);
-    mediaContainer.appendChild(currentElement);
-    
-    // 如果有多个媒体项，启动轮播
-    if (mediaItems.length > 1) {
-        // 显示数量徽章
-        const countBadge = document.createElement('div');
-        countBadge.className = 'media-count';
-        countBadge.textContent = mediaItems.length;
-        dayElement.appendChild(countBadge);
-        
-        // 启动自动轮播
-         function startCarousel() {
-             carouselInterval = setInterval(() => {
-                // 淡出当前元素
-                currentElement.style.opacity = '0';
-                
-                setTimeout(() => {
-                    // 切换到下一个媒体项
-                    currentIndex = (currentIndex + 1) % mediaItems.length;
-                    const nextItem = mediaItems[currentIndex];
-                    
-                    // 移除当前元素
-                    mediaContainer.removeChild(currentElement);
-                    
-                    // 创建新元素
-                    currentElement = createMediaElement(nextItem);
-                    currentElement.style.opacity = '0';
-                    mediaContainer.appendChild(currentElement);
-                    
-                    // 淡入新元素
-                    setTimeout(() => {
-                        currentElement.style.opacity = '1';
-                    }, 50);
-                }, 250);
-            }, 3000); // 每3秒切换一次
-             // 将定时器引用存储到容器上，便于清理
-             mediaContainer._carouselInterval = carouselInterval;
-         }
-        
-        // 鼠标悬停时暂停轮播
-         dayElement.addEventListener('mouseenter', () => {
-             if (carouselInterval) {
-                 clearInterval(carouselInterval);
-                 carouselInterval = null;
-                 mediaContainer._carouselInterval = null;
-             }
-         });
-         
-         // 鼠标离开时恢复轮播
-         dayElement.addEventListener('mouseleave', () => {
-             if (!carouselInterval && mediaItems.length > 1) {
-                 startCarousel();
-             }
-         });
-        
-        // 启动轮播
-        startCarousel();
-    }
-    
-    // 添加删除按钮（对所有情况）
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'calendar-delete-btn';
-    deleteBtn.innerHTML = `
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-        </svg>
-    `;
-    deleteBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (mediaItems.length > 1) {
-            showDeleteMenu(mediaItems, e.target);
-        } else {
-            deleteMedia(mediaItems[0].id);
-        }
-    });  
-    dayElement.appendChild(deleteBtn);
-    
-    // 将媒体容器添加到日期元素中
-    dayElement.appendChild(mediaContainer);
-}
-
-// 渲染媒体画廊
-function renderGallery() {
-    galleryGrid.innerHTML = '';
-    
-    if (mediaData.length === 0) {
-        galleryGrid.innerHTML = '<p style="grid-column: 1/-1; text-align: center; color: #666; padding: 40px;">还没有上传任何文件，快来上传第一个回忆吧！📸</p>';
-        return;
-    }
-    
-    // 按日期排序（最新的在前）
-    const sortedMedia = [...mediaData].sort((a, b) => 
-        new Date(b.upload_date) - new Date(a.upload_date)
-    );
-    
-    sortedMedia.forEach(item => {
-        const mediaElement = createMediaElement(item);
-        galleryGrid.appendChild(mediaElement);
+        elements.providerList.appendChild(node);
     });
 }
 
-function createMediaElement(item) {
-    const mediaDiv = document.createElement('div');
-    mediaDiv.className = 'media-item';
-    
-    const isVideo = item.type.startsWith('video/');
-    const mediaTag = isVideo ? 'video' : 'img';
-    
-    const uploadDate = new Date(item.upload_date);
-    const dateStr = uploadDate.toLocaleDateString('zh-CN', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric'
-    });
-    
-    const videoAttributes = isVideo ? 'muted playsinline preload="metadata"' : '';
-    
-    mediaDiv.innerHTML = `
-        <${mediaTag} src="${item.url}" alt="${item.name}" ${videoAttributes}>
-        <div class="media-info">
-            <div class="media-date">${dateStr}</div>
-            <div class="media-name">${item.name}</div>
-        </div>
-        <button class="media-delete-btn" onclick="event.stopPropagation(); deleteMedia('${item.id}')">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-            </svg>
-        </button>
-    `;
-    
-    mediaDiv.addEventListener('click', () => showMediaModal(item));
-    
-    return mediaDiv;
-}
-
-// 显示媒体模态框
-function showMediaModal(item) {
-    const isVideo = item.type.startsWith('video/');
-    const mediaTag = isVideo ? 'video' : 'img';
-    const videoAttributes = isVideo ? 'controls playsinline muted' : '';
-    
-    modalBody.innerHTML = `
-        <${mediaTag} src="${item.url}" alt="${item.name}" ${videoAttributes}>
-        <div class="modal-actions">
-            <button class="delete-btn" onclick="deleteMedia('${item.id}')">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-                </svg>
-                删除
-            </button>
-        </div>
-    `;
-    
-    mediaModal.style.display = 'block';
-}
-
-// 显示/隐藏加载动画
-function showLoading(show) {
-    loading.style.display = show ? 'flex' : 'none';
-}
-
-// 显示通知
-function showNotification(message, type = 'info') {
-    // 创建通知元素
-    const notification = document.createElement('div');
-    notification.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        padding: 15px 20px;
-        border-radius: 8px;
-        color: white;
-        font-weight: bold;
-        z-index: 3000;
-        animation: slideIn 0.3s ease;
-        max-width: 300px;
-    `;
-    
-    // 根据类型设置颜色
-    const colors = {
-        success: '#4CAF50',
-        error: '#f44336',
-        info: '#2196F3'
+function handleProviderFieldChange(event) {
+    const input = event.target;
+    const providerId = input.dataset.provider;
+    const fieldKey = input.dataset.field;
+    const providerConfig = {
+        ...DEFAULT_CONFIG.providers[providerId],
+        ...state.config.providers[providerId]
     };
-    
-    notification.style.backgroundColor = colors[type] || colors.info;
-    notification.textContent = message;
-    
-    document.body.appendChild(notification);
-    
-    // 3秒后自动移除
-    setTimeout(() => {
-        notification.style.animation = 'slideOut 0.3s ease';
-        setTimeout(() => {
-            if (notification.parentNode) {
-                notification.parentNode.removeChild(notification);
-            }
-        }, 300);
-    }, 3000);
+    providerConfig[fieldKey] = input.value;
+    state.config.providers[providerId] = providerConfig;
+    saveConfig();
 }
 
-// 删除媒体文件
-async function deleteMedia(mediaId) {
-    if (!confirm('确定要删除这个媒体文件吗？')) {
+function updateSupportWarning() {
+    if (!window.showDirectoryPicker) {
+        elements.supportWarning.innerHTML = '<h2>浏览器不支持</h2><p>当前浏览器不支持 File System Access API。请使用最新版本的 Chrome、Edge 或其他 Chromium 浏览器。</p>';
+        elements.supportWarning.classList.add('card-error');
+        disableControls();
+    } else {
+        elements.supportWarning.innerHTML = '<h2>浏览器兼容性正常</h2><p>可以使用 File System Access API 访问本地文件。首次选择文件夹时需要授权。</p>';
+    }
+}
+
+function disableControls() {
+    [elements.pickSourceBtn, elements.pickOutputBtn, elements.startBtn, elements.refreshBtn].forEach(btn => {
+        btn.disabled = true;
+    });
+}
+
+async function selectSourceDirectory() {
+    try {
+        const handle = await window.showDirectoryPicker({ mode: 'read' });
+        if (!await ensurePermission(handle, 'read')) {
+            appendLog('未授予读取权限，无法访问该文件夹。', 'error');
+            return;
+        }
+        state.sourceDirHandle = handle;
+        appendLog(`已选择源文件夹：${handle.name}`, 'info');
+        await loadFilesFromDirectory();
+        updatePathInfo();
+        if (state.config.general.autoStart && state.outputDirHandle) {
+            startProcessing();
+        }
+    } catch (error) {
+        if (error.name !== 'AbortError') {
+            appendLog(`选择源文件夹失败：${error.message}`, 'error');
+        }
+    }
+}
+
+async function selectOutputDirectory() {
+    try {
+        const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        if (!await ensurePermission(handle, 'readwrite')) {
+            appendLog('未授予写入权限，无法使用该输出文件夹。', 'error');
+            return;
+        }
+        state.outputDirHandle = handle;
+        appendLog(`已选择输出文件夹：${handle.name}`, 'info');
+        updatePathInfo();
+        if (state.config.general.autoStart && state.sourceDirHandle) {
+            startProcessing();
+        }
+    } catch (error) {
+        if (error.name !== 'AbortError') {
+            appendLog(`选择输出文件夹失败：${error.message}`, 'error');
+        }
+    }
+}
+
+function updatePathInfo() {
+    const parts = [];
+    if (state.sourceDirHandle) {
+        parts.push(`源：<strong>${escapeHtml(state.sourceDirHandle.name)}</strong>`);
+    }
+    if (state.outputDirHandle) {
+        parts.push(`输出：<strong>${escapeHtml(state.outputDirHandle.name)}</strong>`);
+    }
+    elements.pathInfo.innerHTML = parts.length ? parts.join(' ｜ ') : '';
+}
+
+async function loadFilesFromDirectory() {
+    if (!state.sourceDirHandle) return;
+
+    elements.fileTableBody.innerHTML = '<tr><td colspan="4">正在扫描文件，请稍候…</td></tr>';
+    const includeSubfolders = !!state.config.general.includeSubfolders;
+    const files = [];
+
+    async function traverseDirectory(handle, path = '') {
+        for await (const entry of handle.values()) {
+            if (entry.kind === 'file') {
+                if (!isSupportedImage(entry.name)) continue;
+                const file = await entry.getFile();
+                files.push({
+                    handle: entry,
+                    name: entry.name,
+                    size: file.size,
+                    type: file.type,
+                    relativePath: path ? `${path}/${entry.name}` : entry.name,
+                    providerStatuses: createProviderStatusMap(),
+                    outputs: []
+                });
+            } else if (entry.kind === 'directory' && includeSubfolders) {
+                await traverseDirectory(entry, path ? `${path}/${entry.name}` : entry.name);
+            }
+        }
+    }
+
+    await traverseDirectory(state.sourceDirHandle);
+    state.files = files.sort((a, b) => a.name.localeCompare(b.name));
+    state.completed = 0;
+    updateFileCountLabel();
+    renderFileTable();
+    elements.progressLabel.textContent = '等待开始';
+    appendLog(`扫描完成，共发现 ${files.length} 张图片。`, 'success');
+}
+
+function rescanFiles() {
+    if (!state.sourceDirHandle) {
+        appendLog('请先选择源文件夹。', 'warning');
         return;
     }
-    
+    loadFilesFromDirectory();
+}
+
+function createProviderStatusMap() {
+    const map = {};
+    Object.entries(state.config.providers).forEach(([key, value]) => {
+        if (value?.enabled) {
+            map[key] = { status: 'waiting', message: '' };
+        }
+    });
+    return map;
+}
+
+function updateProviderStatusForFiles(providerId, enabled) {
+    state.files.forEach(file => {
+        if (enabled) {
+            file.providerStatuses[providerId] = { status: 'waiting', message: '' };
+        } else {
+            delete file.providerStatuses[providerId];
+        }
+    });
+}
+
+function renderFileTable() {
+    const tbody = elements.fileTableBody;
+    tbody.innerHTML = '';
+    if (state.files.length === 0) {
+        const row = document.createElement('tr');
+        row.className = 'empty-row';
+        const cell = document.createElement('td');
+        cell.colSpan = 4;
+        cell.textContent = '尚未选择文件夹或没有符合要求的图片文件。';
+        row.appendChild(cell);
+        tbody.appendChild(row);
+        return;
+    }
+
+    state.files.forEach(file => {
+        const row = document.createElement('tr');
+        const nameCell = document.createElement('td');
+        nameCell.textContent = file.relativePath || file.name;
+        row.appendChild(nameCell);
+
+        const sizeCell = document.createElement('td');
+        sizeCell.textContent = formatFileSize(file.size);
+        row.appendChild(sizeCell);
+
+        const statusCell = document.createElement('td');
+        statusCell.appendChild(renderStatusPills(file));
+        row.appendChild(statusCell);
+
+        const outputCell = document.createElement('td');
+        outputCell.innerHTML = file.outputs.map(o => `<div>${escapeHtml(o)}</div>`).join('');
+        row.appendChild(outputCell);
+
+        tbody.appendChild(row);
+    });
+}
+
+function renderStatusPills(file) {
+    const container = document.createElement('div');
+    const providers = Object.keys(file.providerStatuses);
+    if (providers.length === 0) {
+        const span = document.createElement('span');
+        span.className = 'status-pill status-waiting';
+        span.textContent = '未选择提供商';
+        container.appendChild(span);
+        return container;
+    }
+    providers.forEach(id => {
+        const info = file.providerStatuses[id];
+        const provider = PROVIDERS[id];
+        if (!provider) return;
+        const span = document.createElement('span');
+        span.className = `status-pill ${statusClass(info.status)}`;
+        span.textContent = `${provider.name}：${statusLabel(info.status)}`;
+        span.title = info.message || '';
+        container.appendChild(span);
+    });
+    return container;
+}
+
+function statusClass(status) {
+    switch (status) {
+        case 'processing':
+            return 'status-processing';
+        case 'success':
+            return 'status-success';
+        case 'error':
+            return 'status-error';
+        default:
+            return 'status-waiting';
+    }
+}
+
+function statusLabel(status) {
+    switch (status) {
+        case 'processing':
+            return '处理中';
+        case 'success':
+            return '已完成';
+        case 'error':
+            return '失败';
+        case 'skipped':
+            return '已跳过';
+        default:
+            return '待开始';
+    }
+}
+
+function updateFileCountLabel() {
+    const count = state.files.length;
+    elements.fileCountLabel.textContent = count ? `共 ${count} 张图片` : '未加载图片';
+}
+
+function getSelectedProviders() {
+    return Object.entries(state.config.providers)
+        .filter(([, value]) => value?.enabled)
+        .map(([key]) => key);
+}
+
+function updateSelectedProvidersSummary() {
+    const enabledProviders = getSelectedProviders();
+    elements.selectedProvidersSummary.textContent = enabledProviders.length
+        ? `已启用 ${enabledProviders.length} 个服务`
+        : '未启用任何服务';
+}
+
+async function startProcessing() {
+    if (state.isProcessing) {
+        elements.processingWarning.hidden = false;
+        return;
+    }
+    elements.processingWarning.hidden = true;
+
+    if (!state.sourceDirHandle) {
+        appendLog('请先选择源文件夹。', 'warning');
+        return;
+    }
+    if (!state.outputDirHandle) {
+        appendLog('请先选择输出文件夹。', 'warning');
+        return;
+    }
+
+    const providers = getSelectedProviders();
+    if (providers.length === 0) {
+        appendLog('请至少启用一个背景去除服务。', 'warning');
+        return;
+    }
+
+    if (!await ensurePermission(state.sourceDirHandle, 'read')) {
+        appendLog('源文件夹读取权限已失效，请重新授权。', 'error');
+        return;
+    }
+    if (!await ensurePermission(state.outputDirHandle, 'readwrite')) {
+        appendLog('输出文件夹写入权限已失效，请重新授权。', 'error');
+        return;
+    }
+
+    if (state.files.length === 0) {
+        appendLog('没有可处理的图片。', 'warning');
+        return;
+    }
+
+    state.stopRequested = false;
+    state.isProcessing = true;
+    state.completed = 0;
+    toggleProcessingButtons(true);
+    appendLog(`开始处理，共 ${state.files.length} 张图片。`, 'info');
+    const queue = state.files.filter(file => Object.keys(file.providerStatuses).length > 0);
+    const total = queue.length;
+    if (total === 0) {
+        appendLog('未找到启用服务的图片任务。', 'warning');
+        state.isProcessing = false;
+        toggleProcessingButtons(false);
+        return;
+    }
+
+    state.totalTasks = total;
+    updateProgress(0, state.totalTasks);
+
+    let index = 0;
+    const concurrency = clamp(state.config.general.concurrency, 1, 5);
+
+    const workers = Array.from({ length: concurrency }, (_, workerIndex) => (async () => {
+        while (!state.stopRequested) {
+            const currentIndex = index;
+            if (currentIndex >= total) break;
+            index += 1;
+            const file = queue[currentIndex];
+            await processSingleFile(file, providers);
+        }
+    })());
+
+    await Promise.all(workers);
+
+    if (state.stopRequested) {
+        appendLog('任务已被手动终止。', 'warning');
+    } else {
+        appendLog('全部任务处理完成。', 'success');
+    }
+
+    state.isProcessing = false;
+    state.stopRequested = false;
+    toggleProcessingButtons(false);
+    renderFileTable();
+}
+
+function stopProcessing() {
+    if (!state.isProcessing) return;
+    state.stopRequested = true;
+    appendLog('正在停止当前任务，请稍候…', 'warning');
+}
+
+async function processSingleFile(file, providers) {
+    const fileName = file.relativePath || file.name;
+    const context = {
+        outputFormat: state.config.general.outputFormat,
+        fileNameStrategy: state.config.general.fileNameStrategy
+    };
+    let hasSuccess = false;
     try {
-        showLoading(true);
-        
-        // 查找要删除的媒体项
-        const mediaIndex = mediaData.findIndex(item => item.id == mediaId);
-        if (mediaIndex === -1) {
-            throw new Error('媒体文件不存在');
-        }
-        
-        const mediaItem = mediaData[mediaIndex];
-        
-        // 如果使用Supabase，从云存储删除
-        if (supabase && SUPABASE_URL !== 'YOUR_SUPABASE_URL') {
-            // 从存储桶删除文件
-            const fileName = mediaItem.url.split('/').pop();
-            const { error: storageError } = await supabase.storage
-                .from('calendar-media')
-                .remove([fileName]);
-            
-            if (storageError) {
-                console.error('删除云存储文件失败:', storageError);
+        const originalFile = await file.handle.getFile();
+        for (const providerId of providers) {
+            if (state.stopRequested) {
+                updateProviderStatus(file, providerId, 'skipped', '任务已停止');
+                continue;
             }
-            
-            // 从数据库删除记录
-            const { error: dbError } = await supabase
-                .from('media_items')
-                .delete()
-                .eq('id', mediaId);
-            
-            if (dbError) {
-                console.error('删除数据库记录失败:', dbError);
-                throw dbError;
+            if (!file.providerStatuses[providerId]) {
+                continue;
             }
+            updateProviderStatus(file, providerId, 'processing');
+            const provider = PROVIDERS[providerId];
+            try {
+                const config = state.config.providers[providerId];
+                const blob = await provider.process(originalFile, config, context);
+                const savedName = await saveResult(blob, file, providerId);
+                if (!file.outputs.includes(savedName)) {
+                    file.outputs.push(savedName);
+                }
+                updateProviderStatus(file, providerId, 'success', `输出文件：${savedName}`);
+                appendLog(`[${provider.name}] ${fileName} 处理完成，输出 ${savedName}`, 'success');
+                hasSuccess = true;
+                addResultPreview(file, providerId, blob, savedName);
+                persistHistoryEntry({
+                    providerId,
+                    providerName: provider.name,
+                    original: fileName,
+                    output: savedName,
+                    timestamp: Date.now()
+                });
+            } catch (error) {
+                updateProviderStatus(file, providerId, 'error', error.message);
+                appendLog(`[${provider.name}] ${fileName} 处理失败：${error.message}`, 'error');
+            }
+            renderFileTable();
         }
-        
-        // 从本地数据删除
-        mediaData.splice(mediaIndex, 1);
-        saveMediaToStorage();
-        
-        // 重新渲染界面
-        renderCalendar();
-        renderGallery();
-        
-        // 关闭模态框
-        mediaModal.style.display = 'none';
-        
-        showNotification('媒体文件删除成功', 'success');
-        
     } catch (error) {
-        console.error('删除媒体文件失败:', error);
-        showNotification('删除失败: ' + error.message, 'error');
+        appendLog(`读取文件 ${fileName} 时出错：${error.message}`, 'error');
+        providers.forEach(providerId => updateProviderStatus(file, providerId, 'error', '读取失败'));
     } finally {
-        showLoading(false);
+        state.completed += 1;
+        updateProgress(state.completed, state.files.length);
+        if (!hasSuccess) {
+            // remove outputs appended due to previous runs when rerun? keep existing
+        }
     }
 }
 
-// 显示删除菜单（用于多媒体项的日历格子）
-function showDeleteMenu(mediaItems, buttonElement) {
-    // 移除现有的删除菜单
-    const existingMenu = document.querySelector('.delete-menu');
-    if (existingMenu) {
-        existingMenu.remove();
+function updateProviderStatus(file, providerId, status, message = '') {
+    if (!file.providerStatuses[providerId]) return;
+    file.providerStatuses[providerId].status = status;
+    file.providerStatuses[providerId].message = message;
+}
+
+function updateProgress(done, totalOverride) {
+    const total = totalOverride || state.totalTasks || state.files.length || 1;
+    elements.progressLabel.textContent = `进度：${done} / ${total}`;
+}
+
+async function saveResult(blob, file, providerId) {
+    if (!state.outputDirHandle) {
+        throw new Error('未选择输出目录');
     }
-    
-    const menu = document.createElement('div');
-    menu.className = 'delete-menu';
-    menu.style.cssText = `
-        position: absolute;
-        background: white;
-        border: 1px solid #ddd;
-        border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        z-index: 1000;
-        min-width: 120px;
-        padding: 8px 0;
+    const provider = PROVIDERS[providerId];
+    const baseName = file.name.replace(/\.[^.]+$/, '');
+    let fileName;
+    if (state.config.general.fileNameStrategy === 'folder') {
+        const folderHandle = await state.outputDirHandle.getDirectoryHandle(providerId, { create: true });
+        fileName = `${baseName}.${state.config.general.outputFormat}`;
+        await writeFile(folderHandle, fileName, blob);
+        return `${provider.name}/${fileName}`;
+    }
+    fileName = `${baseName}_${providerId}.${state.config.general.outputFormat}`;
+    await writeFile(state.outputDirHandle, fileName, blob);
+    return fileName;
+}
+
+async function writeFile(directoryHandle, fileName, blob) {
+    const fileHandle = await directoryHandle.getFileHandle(fileName, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+}
+
+function addResultPreview(file, providerId, blob, savedName) {
+    const url = URL.createObjectURL(blob);
+    state.resultPreviews.push(url);
+    elements.resultGrid.classList.remove('empty');
+    const card = document.createElement('div');
+    card.className = 'result-card';
+    const provider = PROVIDERS[providerId];
+    card.innerHTML = `
+        <img src="${url}" alt="${escapeHtml(savedName)}" />
+        <h4>${escapeHtml(provider.name)}</h4>
+        <span>${escapeHtml(savedName)}</span>
     `;
-    
-    // 添加"删除全部"选项
-    const deleteAllBtn = document.createElement('button');
-    deleteAllBtn.textContent = '删除全部';
-    deleteAllBtn.style.cssText = `
-        width: 100%;
-        padding: 8px 16px;
-        border: none;
-        background: none;
-        text-align: left;
-        cursor: pointer;
-        font-size: 14px;
-        color: #e74c3c;
-    `;
-    deleteAllBtn.addEventListener('click', () => {
-        if (confirm(`确定要删除这${mediaItems.length}个媒体文件吗？`)) {
-            mediaItems.forEach(item => deleteMedia(item.id));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = savedName;
+    link.textContent = '下载';
+    link.className = 'download-link';
+    card.appendChild(link);
+    elements.resultGrid.appendChild(card);
+    updateResultSummary();
+}
+
+function clearResults() {
+    state.resultPreviews.forEach(url => URL.revokeObjectURL(url));
+    state.resultPreviews = [];
+    elements.resultGrid.innerHTML = '<div class="empty-placeholder">处理完成后将在此展示缩略图。</div>';
+    elements.resultGrid.classList.add('empty');
+    updateResultSummary();
+}
+
+function updateResultSummary() {
+    const count = elements.resultGrid.classList.contains('empty') ? 0 : elements.resultGrid.querySelectorAll('.result-card').length;
+    const historyCount = state.history.length;
+    if (count === 0 && historyCount === 0) {
+        elements.resultSummary.textContent = '暂无结果';
+    } else if (count === 0) {
+        elements.resultSummary.textContent = `历史共 ${historyCount} 条记录`;
+    } else {
+        elements.resultSummary.textContent = `本次生成 ${count} 张 ｜ 历史累计 ${historyCount} 条`;
+    }
+}
+
+function renderHistorySummary() {
+    updateResultSummary();
+}
+
+function appendLog(message, level = 'info') {
+    const line = document.createElement('div');
+    line.className = `log-line ${level}`;
+    const time = new Date().toLocaleTimeString();
+    line.textContent = `[${time}] ${message}`;
+    elements.logOutput.appendChild(line);
+    elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
+}
+
+async function copyLogToClipboard() {
+    const text = Array.from(elements.logOutput.children).map(node => node.textContent).join('\n');
+    try {
+        if (!navigator.clipboard || !navigator.clipboard.writeText) {
+            throw new Error('浏览器不支持 Clipboard API');
         }
-        menu.remove();
+        await navigator.clipboard.writeText(text);
+        appendLog('日志已复制到剪贴板。', 'success');
+    } catch (error) {
+        appendLog(`复制日志失败：${error.message}`, 'error');
+    }
+}
+
+function toggleProcessingButtons(isProcessing) {
+    elements.startBtn.disabled = isProcessing;
+    elements.stopBtn.disabled = !isProcessing;
+}
+
+function loadConfig() {
+    try {
+        const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+        if (!stored) return cloneDeep(DEFAULT_CONFIG);
+        return deepMerge(cloneDeep(DEFAULT_CONFIG), stored);
+    } catch (error) {
+        console.warn('读取配置失败，使用默认配置。', error);
+        return cloneDeep(DEFAULT_CONFIG);
+    }
+}
+
+function saveConfig(showToast = false) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.config));
+    if (showToast) {
+        appendLog('配置已保存至本地浏览器。', 'info');
+    }
+}
+
+function resetConfig() {
+    if (!confirm('确定要恢复默认配置吗？该操作不会删除历史任务记录。')) {
+        return;
+    }
+    state.config = cloneDeep(DEFAULT_CONFIG);
+    saveConfig();
+    state.files.forEach(file => {
+        file.providerStatuses = {};
+        file.outputs = [];
     });
-    
-    menu.appendChild(deleteAllBtn);
-    
-    // 定位菜单
-    const rect = buttonElement.getBoundingClientRect();
-    menu.style.left = rect.left + 'px';
-    menu.style.top = (rect.bottom + 5) + 'px';
-    
-    document.body.appendChild(menu);
-    
-    // 点击其他地方关闭菜单
-    const closeMenu = (e) => {
-        if (!menu.contains(e.target)) {
-            menu.remove();
-            document.removeEventListener('click', closeMenu);
-        }
-    };
-    
-    setTimeout(() => {
-        document.addEventListener('click', closeMenu);
-    }, 100);
+    renderProviders();
+    applyGeneralConfig();
+    renderFileTable();
+    updateSelectedProvidersSummary();
+    appendLog('已恢复默认配置。', 'warning');
 }
 
-// 添加动画样式
-const style = document.createElement('style');
-style.textContent = `
-    @keyframes slideIn {
-        from {
-            transform: translateX(100%);
-            opacity: 0;
+function deepMerge(target, source) {
+    Object.keys(source).forEach(key => {
+        if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+            target[key] = deepMerge(target[key] || {}, source[key]);
+        } else {
+            target[key] = source[key];
         }
-        to {
-            transform: translateX(0);
-            opacity: 1;
-        }
-    }
-    
-    @keyframes slideOut {
-        from {
-            transform: translateX(0);
-            opacity: 1;
-        }
-        to {
-            transform: translateX(100%);
-            opacity: 0;
-        }
-    }
-`;
-document.head.appendChild(style);
-
-// 配置提示
-if (SUPABASE_URL === 'YOUR_SUPABASE_URL') {
-    console.log('%c📝 配置提示', 'color: #667eea; font-size: 16px; font-weight: bold;');
-    console.log('请在 script.js 文件中配置您的 Supabase 项目信息：');
-    console.log('1. SUPABASE_URL: 您的 Supabase 项目 URL');
-    console.log('2. SUPABASE_ANON_KEY: 您的 Supabase 匿名密钥');
-    console.log('3. 在 Supabase 中创建 "calendar-media" 存储桶');
-    console.log('4. 创建 "media_items" 数据表');
-    console.log('\n当前使用本地存储模式，数据仅保存在浏览器中。');
+    });
+    return target;
 }
+
+function cloneDeep(obj) {
+    return JSON.parse(JSON.stringify(obj));
+}
+
+function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+}
+
+function formatFileSize(size) {
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+    if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(2)} MB`;
+    return `${(size / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function isSupportedImage(name) {
+    return /\.(png|jpg|jpeg|webp)$/i.test(name);
+}
+
+async function ensurePermission(handle, mode) {
+    if (!handle) return false;
+    if (handle.queryPermission) {
+        const query = await handle.queryPermission({ mode });
+        if (query === 'granted') return true;
+    }
+    if (handle.requestPermission) {
+        const request = await handle.requestPermission({ mode });
+        return request === 'granted';
+    }
+    return true;
+}
+
+async function safeReadText(response) {
+    try {
+        return await response.text();
+    } catch (error) {
+        return '无法读取错误信息';
+    }
+}
+
+function escapeHtml(str = '') {
+    return String(str).replace(/[&<>"]+/g, s => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;'
+    })[s] || s);
+}
+
+async function blobToBase64(blob, mode = 'raw') {
+    const arrayBuffer = await blob.arrayBuffer();
+    let binary = '';
+    const bytes = new Uint8Array(arrayBuffer);
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, i + chunkSize);
+        binary += String.fromCharCode.apply(null, chunk);
+    }
+    const base64 = btoa(binary);
+    return mode === 'data_url' ? `data:${blob.type || 'image/png'};base64,${base64}` : base64;
+}
+
+function base64ToBlob(base64, mime = 'image/png') {
+    const binary = atob(base64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mime });
+}
+
+async function ensureOutputFormat(blob, format) {
+    if (format === 'png') return blob;
+    if (format === 'jpg' || format === 'jpeg') {
+        return await convertToJpeg(blob);
+    }
+    return blob;
+}
+
+async function convertToJpeg(blob) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+        throw new Error('浏览器不支持画布转换');
+    }
+
+    if (window.createImageBitmap) {
+        const bitmap = await createImageBitmap(blob);
+        canvas.width = bitmap.width;
+        canvas.height = bitmap.height;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(bitmap, 0, 0);
+        bitmap.close();
+    } else {
+        const image = await blobToImage(blob);
+        canvas.width = image.width;
+        canvas.height = image.height;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(image, 0, 0);
+    }
+
+    const newBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.96));
+    if (!newBlob) {
+        throw new Error('JPG 转换失败');
+    }
+    return newBlob;
+}
+
+function blobToImage(blob) {
+    return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+            URL.revokeObjectURL(url);
+            resolve(img);
+        };
+        img.onerror = (err) => {
+            URL.revokeObjectURL(url);
+            reject(err);
+        };
+        img.src = url;
+    });
+}
+
+function loadHistory() {
+    try {
+        return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+    } catch (error) {
+        console.warn('读取历史记录失败：', error);
+        return [];
+    }
+}
+
+function persistHistoryEntry(entry) {
+    state.history.push(entry);
+    if (state.history.length > 200) {
+        state.history.splice(0, state.history.length - 200);
+    }
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(state.history));
+    updateResultSummary();
+}
+
+window.addEventListener('beforeunload', () => {
+    state.resultPreviews.forEach(url => URL.revokeObjectURL(url));
+});
